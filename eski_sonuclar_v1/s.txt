@@ -1,0 +1,33 @@
+
+--- kNN Egitiliyor ---
+Basarili! Sure: 0.01 sn | F1-Score: 0.6838
+
+--- Naive Bayes Egitiliyor ---
+Basarili! Sure: 0.04 sn | F1-Score: 0.7334
+
+--- LSVM Egitiliyor ---
+Basarili! Sure: 0.74 sn | F1-Score: 0.6933
+
+--- RBF SVM Egitiliyor ---
+Basarili! Sure: 2.79 sn | F1-Score: 0.8019
+
+--- Random Forest Egitiliyor ---
+Basarili! Sure: 1.51 sn | F1-Score: 0.9139
+
+--- MLP Egitiliyor ---
+Basarili! Sure: 21.30 sn | F1-Score: 0.8866
+
+--- XGBoost Egitiliyor ---
+Basarili! Sure: 2.09 sn | F1-Score: 0.9362
+
+--- Logistic Regression Egitiliyor ---
+Basarili! Sure: 0.42 sn | F1-Score: 0.7634
+
+--- LightGBM Egitiliyor ---
+Basarili! Sure: 1.51 sn | F1-Score: 0.9488
+
+--- CatBoost Egitiliyor ---
+Basarili! Sure: 3.81 sn | F1-Score: 0.9555
+
+--- Voting (RF+XGB+LGB) Egitiliyor ---
+Basarili! Sure: 12.14 sn | F1-Score: 0.9404

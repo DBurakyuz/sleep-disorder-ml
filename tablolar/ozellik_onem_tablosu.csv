@@ -1,0 +1,31 @@
+Ozellik,Orijinal_Sutun,Onem_Skoru,Yuzde_Etki (%)
+Uyku Kalite Skoru (sleep_quality),sleep_quality_score,0.15283960967924295,15.28
+Ruh Sağlığı (mental_health),mental_health_condition,0.13670196983463337,13.67
+Uyku Süresi (sleep_duration),sleep_duration_hrs,0.11919132749156704,11.92
+Vücut Kitle İndeksi (bmi),bmi,0.08241927178886282,8.24
+Uyku Bölünme İndeksi - SFI (frag_idx),sleep_fragmentation_index,0.0745832778801115,7.46
+Stres Skoru (stress),stress_score,0.07373952965584354,7.37
+Uykuya Dalma Süresi (latency),sleep_latency_mins,0.0617224888413513,6.17
+Gece Uyanma Sayısı (wakeups),wake_episodes_per_night,0.036355361330327435,3.64
+REM Uykusu % (rem_perc),rem_percentage,0.025026974949387708,2.5
+Onarıcı Uyku Oranı - RSR (restorative),restorative_sleep_ratio,0.019694885652637398,1.97
+Yaş (age),age,0.018757921556880056,1.88
+Çalışma Saati (work_hours),work_hours_that_day,0.01864738699290548,1.86
+Yatmadan Önce Ekran (screen_time),screen_time_before_bed_mins,0.01610987333875118,1.61
+Günlük Adım Sayısı (steps),steps_that_day,0.01602340237742123,1.6
+Derin Uyku % (deep_sleep),deep_sleep_percentage,0.015985182419432094,1.6
+Hafta Sonu Farkı (weekend_diff),weekend_sleep_diff_hrs,0.015971389565626833,1.6
+Oda Sıcaklığı (temp),room_temperature_celsius,0.015400359425934202,1.54
+Dinlenme Kalp Nabzı (heart_rate),heart_rate_resting_bpm,0.013582033562866948,1.36
+Alkol Miktarı (alcohol),alcohol_units_before_bed,0.01193680980200748,1.19
+Vardiyalı Çalışma (shift_work),shift_work,0.011198886958504252,1.12
+Kafein Miktarı (caffeine),caffeine_mg_before_bed,0.010584765301100411,1.06
+Meslek (occupation),occupation,0.010223253271052375,1.02
+Ülke (country),country,0.009996579370226126,1.0
+Gündüz Şekerleme (nap),nap_duration_mins,0.008499942140464158,0.85
+Biyolojik Ritim (chronotype),chronotype,0.006476740364170679,0.65
+Mevsim (season),season,0.005667356237616493,0.57
+Gün Tipi (day_type),day_type,0.004604313119859556,0.46
+Cinsiyet (gender),gender,0.003133947384571035,0.31
+Uyku İlacı (sleep_aid),sleep_aid_used,0.0025918851761699527,0.26
+Egzersiz Yapıldı mı (exercise),exercise_day,0.002333274530474539,0.23

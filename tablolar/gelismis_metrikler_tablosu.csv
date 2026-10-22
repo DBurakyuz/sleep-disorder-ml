@@ -1,0 +1,9 @@
+,ROC-AUC (Ayırt Etme),Specificity (Özgüllük - Temiz Bilme),MCC (Matthews Korelasyonu),Log-Loss (Belirsizlik Kaybı - Düşük İyi),F1-Score (Ağırlıklı Denge)
+CatBoost,0.995,0.9808,0.9029,0.158,0.9426
+XGBoost,0.9889,0.9576,0.8509,0.2374,0.9104
+Random Forest,0.9775,0.9235,0.7791,0.3631,0.8659
+MLP (Sinir Agi),0.9604,0.9096,0.7227,0.3802,0.8374
+Logistic Regression,0.9133,0.8478,0.5951,0.534,0.7614
+LSVM,0.9032,0.8054,0.5457,0.5893,0.7114
+kNN,0.8926,0.7745,0.5012,1.1215,0.6952
+Naive Bayes,0.8776,0.8387,0.5253,0.8327,0.7219
