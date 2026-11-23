@@ -1,0 +1,16 @@
+﻿Model,Egitim_Boyutu,Egitim_F1_Macro,CV_F1_Macro_Ort,CV_F1_Macro_Std
+Karar Ağacı (max_depth=2),8000,0.3544,0.355,0.0036
+Karar Ağacı (max_depth=2),26000,0.3722,0.3704,0.0381
+Karar Ağacı (max_depth=2),44000,0.3713,0.3705,0.0393
+Karar Ağacı (max_depth=2),62000,0.3533,0.3527,0.0009
+Karar Ağacı (max_depth=2),80000,0.3715,0.3709,0.0391
+Karar Ağacı (Sınırsız),8000,1.0,0.6724,0.0134
+Karar Ağacı (Sınırsız),26000,1.0,0.7259,0.0065
+Karar Ağacı (Sınırsız),44000,1.0,0.7545,0.0085
+Karar Ağacı (Sınırsız),62000,1.0,0.7732,0.0044
+Karar Ağacı (Sınırsız),80000,1.0,0.7839,0.0036
+Lojistik Regresyon (Ölçekli),8000,0.7441,0.7191,0.0045
+Lojistik Regresyon (Ölçekli),26000,0.7407,0.7342,0.0018
+Lojistik Regresyon (Ölçekli),44000,0.7407,0.7353,0.0033
+Lojistik Regresyon (Ölçekli),62000,0.7379,0.7352,0.0045
+Lojistik Regresyon (Ölçekli),80000,0.7381,0.7358,0.0041

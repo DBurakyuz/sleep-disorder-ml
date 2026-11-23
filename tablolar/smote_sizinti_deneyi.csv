@@ -1,0 +1,3 @@
+﻿Yontem,F1_Macro,Recall_Agir,MCC
+Yanlış (Önce SMOTE → Sonra CV),0.9168,0.9617,0.861
+Doğru (Pipeline İçinde SMOTE),0.7667,0.6136,0.7763
