@@ -378,19 +378,21 @@ def create_paper(out_path="Makine_Ogrenmesi_Ile_Uyku_Bozuklugu_Riski_Tahmini.doc
         "Uyku; hücresel onarım, bilişsel pekiştirme, bağışıklık regülasyonu ve metabolik homeostaz açısından temel bir "
         "biyolojik süreçtir [1]. Küreselleşme, vardiyalı çalışma düzenleri, hareketsiz yaşam tarzı ve akşam saatlerindeki "
         "ekran maruziyeti, erişkin popülasyonda uyku bozukluklarının görülme sıklığını belirgin biçimde artırmıştır. "
-        "Dünya Sağlık Örgütü (DSÖ) raporlarına göre erişkin nüfusun yaklaşık %35'i akut veya kronik uyku yakınmaları "
-        "yaşamaktadır [2]. Türkiye'de Türk Toraks Derneği uzlaşı raporu da erişkinlerde obstrüktif uyku apnesi ve kronik "
-        "insomni belirtilerinin yaygınlığını bildirmektedir [3]."
+        "Güncel epidemiyolojik derlemelere göre erişkin nüfusun yaklaşık %10'u kronik insomni bozukluğu, ek %20'si ise "
+        "geçici uyku yakınmaları yaşamaktadır [2]. Türkiye'de Türk Toraks Derneği uzlaşı raporu da erişkinlerde obstrüktif "
+        "uyku apne sendromunun (OSAS) yaygınlığını ve klinik önemini bildirmektedir [3]."
     )
     doc.add_paragraph(
         "Klinik tanıda altın standart olan Polisomnografi (PSG), yüksek donanım maliyeti, uzun randevu sıraları ve "
         "hastane ortamının doğal uyku ritmini bozması gibi kısıtlara sahiptir. Bu nedenle günlük fizyolojik ve yaşam tarzı "
         "ölçümleri üzerinden risk ön değerlendirmesi yapabilen makine öğrenmesi yöntemleri önem kazanmıştır [4]. "
-        "[5]'de yazarlar, kardiyak sinyallerden uyku apnesi tespiti için Destek Vektör Makineleri (DVM) yöntemini "
-        "kullanmışlardır. [6]'da yazarlar, giyilebilir sensör verileri üzerinde Rastgele Orman algoritmasını kıyaslamışlardır. "
-        "[7]'de yazarlar, EKG kayıtlarından apne tespiti için Yapay Sinir Ağları ve doğrusal modelleri karşılaştırmışlardır. "
+        "[5]'de yazarlar, fizyolojik sinyallerden obstrüktif uyku apnesi tanısı için Destek Vektör Makineleri (DVM) "
+        "sınıflandırıcısını kullanmışlardır. [6]'da yazarlar, geniş ölçekli giyilebilir sensör verileri üzerinde uyku-uyanıklık "
+        "sınıflandırması için Rastgele Orman dahil çeşitli makine öğrenmesi algoritmalarını kıyaslamışlardır. "
+        "[7]'de yazarlar, EKG kayıtlarından apne tespiti için 13 farklı algoritmayı sistematik olarak karşılaştırmışlardır. "
         "[8]'de yazarlar, aktivite tabanlı uyku-uyanıklık ayrımında istatistiksel sınıflandırıcılar uygulamışlardır. "
-        "[9]'da yazarlar, uyku bozukluklarının makine öğrenmesi ile teşhisine ilişkin kapsamlı bir derleme sunmuşlardır."
+        "[9]'da yazarlar, fizyolojik sinyallere dayalı otomatik uyku evreleme ve makine öğrenmesi yaklaşımlarını kapsamlı "
+        "bir derleme ile incelemişlerdir."
     )
     doc.add_paragraph(
         "Mevcut literatürde sık rastlanan metodolojik boşluklar şunlardır: (i) kategorik kodlama, ölçeklendirme veya aşırı "
@@ -562,8 +564,9 @@ def create_paper(out_path="Makine_Ogrenmesi_Ile_Uyku_Bozuklugu_Riski_Tahmini.doc
         "Rastgele Orman (Random Forest): Çok sayıda karar ağacını bootstrap alt örneklemleriyle eğitip çoğunluk oyuyla birleştirerek "
         "tek ağacın yüksek varyansını düşürür [15]. Çok Katmanlı Algılayıcı (MLP): Gizli katmanlarda doğrusal olmayan aktivasyonlarla "
         "karmaşık örüntüleri öğrenen ileri beslemeli yapay sinir ağıdır [12]. Gradyan Artırma Modelleri (XGBoost ve CatBoost): "
-        "Sığ karar ağaçlarını sıralı biçimde ekleyerek önceki ağaçların artık hatalarını azaltır; CatBoost simetrik (oblivious) ağaç "
-        "yapısı ve sıralı artırma mekanizmasıyla aşırı öğrenmeye karşı yüksek direnç sunar [16, 17]."
+        "Sığ karar ağaçlarını sıralı biçimde ekleyerek önceki ağaçların artık hatalarını azaltır; XGBoost düzenlileştirilmiş "
+        "ölçeklenebilir ağaç artırma mimarisiyle, CatBoost ise simetrik (oblivious) ağaç yapısı ve sıralı artırma "
+        "mekanizmasıyla aşırı öğrenmeye karşı yüksek direnç sunar [16, 17, 24]."
     )
 
     # -------------------------------------------------------------------------
@@ -736,23 +739,30 @@ def create_paper(out_path="Makine_Ogrenmesi_Ile_Uyku_Bozuklugu_Riski_Tahmini.doc
     t6_min_rows = [
         (
             m,
-            tr_num(r["Agir_Recall"]),
-            tr_num(r["Agir_Precision"]),
-            tr_num(r["Agir_Specificity"]),
-            tr_num(r["Orta_Recall"]),
-            tr_num(r["Orta_Precision"]),
-            tr_num(r["Orta_F1"]),
+            f"{tr_int(r['Agir_Yakalanan'])} ({tr_pct(r['Agir_Recall'], 1)})",
+            tr_pct(r["Agir_Precision"], 1),
+            tr_pct(r["Agir_Specificity"], 1),
+            f"{tr_int(r['Orta_Yakalanan'])} ({tr_pct(r['Orta_Recall'], 1)})",
+            tr_pct(r["Orta_Precision"], 1),
             tr_int(r["Uzak_Hata_2Plus"]),
         )
         for m, r in df_min.iterrows()
     ]
     add_table(
-        "Tablo 6. Tüm modellerde azınlık sınıfları (Ağır ve Orta) başarımı ve ≥2 sınıf uzaklığındaki kritik hata sayıları",
-        ["Model", "Ağır Rec.", "Ağır Prec.", "Ağır Özg.", "Orta Rec.", "Orta Prec.", "Orta F1", "≥2 Hata"],
+        "Tablo 6. Tüm modellerde yakalanan Ağır (4.066) ve Orta (8.299) hasta sayıları, alarm doğruluğu (Precision) ve ≥2 sınıf uzak hatalar",
+        [
+            "Model",
+            "Yakalanan Ağır\n(4.066'dan / Recall)",
+            "Ağır Kesinlik\n(Precision)",
+            "Ağır Özgüllük\n(Specificity)",
+            "Yakalanan Orta\n(8.299'dan / Recall)",
+            "Orta Kesinlik\n(Precision)",
+            "≥2 Sınıf\nUzak Hata",
+        ],
         t6_min_rows,
-        [1.45, 0.76, 0.76, 0.76, 0.76, 0.76, 0.75, 0.80],
-        note="Sınıf ölçütleri 10-kat CV ortalamasıdır; ≥2 Hata sütunu 100.000 OOF tahmininde |gerçek − tahmin| ≥ 2 olan kritik sıçrama sayısıdır.",
-        font_size=8.2,
+        [1.32, 1.15, 0.85, 0.85, 1.15, 0.80, 0.68],
+        note="Yakalanan hasta sayıları ve ≥2 Sınıf Uzak Hata (|gerçek − tahmin| ≥ 2) 100.000 OOF tahmininden; yüzdeler 10-kat CV ortalamasından alınmıştır.",
+        font_size=8.1,
     )
 
     doc.add_paragraph(
@@ -783,14 +793,16 @@ def create_paper(out_path="Makine_Ogrenmesi_Ile_Uyku_Bozuklugu_Riski_Tahmini.doc
     )
 
     doc.add_paragraph(
-        "Eşikten bağımsız sıralama kalitesini incelemek amacıyla hem birincil pozitif sınıf olan 'Ağır' (%4,07) hem de tüm "
-        "modellerin en çok zorlandığı geçiş sınıfı olan 'Orta' (%8,30) için birleşik (OOF) ROC ve Precision–Recall (PR) "
-        "eğrilerini Şekil 3'te (2×2 panel) çizdik. Negatif örnekler çoğunlukta olduğundan ROC eğrileri özellikle Ağır sınıfta "
-        "birçok modelde 0,97–0,99 bandında iyimser görünürken, taban çizgisi prevalansa (0,041 ve 0,083) eşit olan PR eğrileri "
-        "modeller arasındaki gerçek ayırt edicilik uçurumunu —özellikle Orta sınıfta CatBoost (AP=0,859) ile LSVM (0,385), "
-        "Naive Bayes (0,337) ve kNN (0,275) arasındaki farkı— çok daha keskin biçimde ortaya koymuştur."
+        "Sabit bir karar eşiğindeki hasta yakalama adetleri Tablo 6'da verilmiş olsa da, olası tüm alarm eşiklerinde modellerin "
+        "sıralama kalitesini kıyaslamak için hem birincil pozitif sınıf 'Ağır' (%4,07) hem de en zor geçiş sınıfı 'Orta' (%8,30) "
+        "için birleşik (OOF) ROC ve Precision–Recall (PR) eğrilerini Şekil 3'te (2×2 panel) çizdik. Görsel netliği artırmak "
+        "amacıyla en yüksek, orta ve düşük başarım gruplarını temsil eden beş model (CatBoost, XGBoost, MLP, LSVM ve kNN) "
+        "seçildi; tüm dokuz modelin Macro AUROC ve Macro AUPR özetleri Tablo 5b'de yer almaktadır. Negatif örnekler çoğunlukta "
+        "olduğundan sol sütundaki ROC eğrileri zayıf modelleri bile sol üst köşeye sıkıştırarak iyimser (AUC = 0,92–0,99) "
+        "gösterirken, taban çizgisi prevalansa (0,041 ve 0,083) eşit olan sağ sütundaki PR eğrileri gerçek farkı —özellikle "
+        "Orta sınıfta CatBoost (AP=0,861) ile LSVM (0,385) ve kNN (0,275) arasındaki uçurumu— açıkça ortaya koymaktadır."
     )
-    add_figure("grafik_3_roc_pr_egrileri.png", "Şekil 3. Ağır risk (%4,07, üst) ve Orta risk (%8,30, alt) sınıfları için birleşik (OOF) ROC ve Precision–Recall eğrileri", 6.2)
+    add_figure("grafik_3_roc_pr_egrileri.png", "Şekil 3. Seçili beş temsili model için Ağır (%4,07, üst) ve Orta (%8,30, alt) risk sınıflarında birleşik (OOF) ROC ve Precision–Recall eğrileri", 6.3)
 
     add_h2("3.3. Aşırı Öğrenme (Overfitting) Analizi: Eğitim–CV Farkı, Derinlik Taraması ve Öğrenme Eğrileri")
     rf_tr, rf_cv, rf_gap = df_train_cv.loc["Random Forest", "Egitim_F1_Macro"], df_train_cv.loc["Random Forest", "CV_F1_Macro_Ort"], df_train_cv.loc["Random Forest", "Fark_Macro"]
@@ -870,7 +882,7 @@ def create_paper(out_path="Makine_Ogrenmesi_Ile_Uyku_Bozuklugu_Riski_Tahmini.doc
 
     doc.add_paragraph(
         f"Azınlık sınıflardaki (%8,30 Orta ve %4,07 Ağır) duyarlılığı incelemek amacıyla 20.000 tabakalı örneklem üzerinde "
-        f"10-kat CV ile sınıf ağırlıklandırma (class_weight) ve ImbPipeline içinde SMOTE müdahalelerini sınadık (Tablo 10, "
+        f"10-kat CV ile sınıf ağırlıklandırma (class_weight) ve ImbPipeline içinde SMOTE [18] müdahalelerini sınadık (Tablo 10, "
         f"Şekil 5). Lojistik Regresyon'da class_weight='balanced' kullanımı, Ağır sınıf duyarlılığını {tr_pct(lr_sade_sev)} "
         f"düzeyinden {tr_pct(lr_cw_sev)} düzeyine (+{lr_sev_gain_tr} puan) ve Orta sınıf duyarlılığını {tr_pct(lr_sade_mod)} "
         f"düzeyinden {tr_pct(lr_cw_mod)} düzeyine (+{lr_mod_gain_tr} puan) yükseltirken, toplam doğruluk ve MCC'de küçük bir "
@@ -1136,28 +1148,29 @@ def create_paper(out_path="Makine_Ogrenmesi_Ile_Uyku_Bozuklugu_Riski_Tahmini.doc
     add_h1("KAYNAKLAR (REFERENCES)")
     kaynaklar = [
         "[1] Walker, M. P., \"Why We Sleep: Unlocking the Power of Sleep and Dreams\", Scribner, New York, 2017.",
-        "[2] World Health Organization, \"Global status report on noncommunicable diseases\", WHO Press, Cenevre, 2022.",
-        "[3] Türk Toraks Derneği, \"Obstrüktif Uyku Apnesi Sendromu Tanı ve Tedavi Uzlaşı Raporu\", Türk Toraks Dergisi, Cilt 17, No 1, 1-45, 2016.",
-        "[4] Alpaydin, E., \"Introduction to Machine Learning\", 3. Baskı, The MIT Press, Londra, 2014.",
-        "[5] Al-Angari, H. M., Sahakian, A. V., \"Automated detection of obstructive sleep apnea using support vector machines\", IEEE Trans. Inf. Technol. Biomed., Cilt 16, No 5, 1003-1009, 2012.",
-        "[6] Palotti, J., Mall, R., Fernandez-Luque, L., \"Benchmark on a large dataset for sleep detection using wearable sensors and random forest\", Scientific Reports, Cilt 9, No 1, 12001, 2019.",
-        "[7] Penzel, T. ve ark., \"Systematic comparison of different algorithms for apnoea detection based on electrocardiogram recordings\", Med. Biol. Eng. Comput., Cilt 40, No 4, 402-407, 2002.",
+        "[2] Morin, C. M., Jarrin, D. C., \"Epidemiology of insomnia: Prevalence, course, risk factors, and public health burden\", Sleep Medicine Clinics, Cilt 17, No 2, 173-191, 2022.",
+        "[3] Türk Toraks Derneği, \"Obstrüktif Uyku Apne Sendromu Tanı ve Tedavi Uzlaşı Raporu\", Türk Toraks Dergisi, Cilt 13, Ek 1, 1-73, 2012.",
+        "[4] Alpaydin, E., \"Introduction to Machine Learning\", 3. Baskı, The MIT Press, Cambridge, MA, 2014.",
+        "[5] Al-Angari, H. M., Sahakian, A. V., \"Automated recognition of obstructive sleep apnea syndrome using support vector machine classifier\", IEEE Trans. Inf. Technol. Biomed., Cilt 16, No 3, 463-468, 2012.",
+        "[6] Palotti, J., Mall, R., Aupetit, M., Rueschman, M., Singh, M., Sathyanarayana, A., Taheri, S., Fernandez-Luque, L., \"Benchmark on a large cohort for sleep-wake classification with machine learning techniques\", npj Digital Medicine, Cilt 2, Makale 50, 2019.",
+        "[7] Penzel, T., McNames, J., Murray, A., de Chazal, P., Moody, G., Raymond, B., \"Systematic comparison of different algorithms for apnoea detection based on electrocardiogram recordings\", Med. Biol. Eng. Comput., Cilt 40, No 4, 402-407, 2002.",
         "[8] Sadeh, A., Sharkey, K. M., Carskadon, M. A., \"Activity-based sleep-wake identification: An empirical test of methodological issues\", Sleep, Cilt 17, No 3, 201-207, 1994.",
-        "[9] Faust, O. ve ark., \"Application of machine learning tools in sleep disorder diagnosis: A review\", Journal of Medical Systems, Cilt 40, No 12, 275, 2016.",
-        "[10] Bonnet, M. H., Arand, D. L., \"Clinical effects of sleep fragmentation\", Sleep Medicine Reviews, Cilt 7, No 4, 297-310, 2003.",
-        "[11] Buysse, D. J. ve ark., \"The Pittsburgh Sleep Quality Index: a new instrument for psychiatric practice and research\", Psychiatry Research, Cilt 28, No 2, 193-213, 1989.",
+        "[9] Faust, O., Razaghi, H., Barika, R., Ciaccio, E. J., Acharya, U. R., \"A review of automated sleep stage scoring based on physiological signals for the new millennia\", Computer Methods and Programs in Biomedicine, Cilt 176, 81-91, 2019.",
+        "[10] Bonnet, M. H., Arand, D. L., \"Clinical effects of sleep fragmentation versus sleep deprivation\", Sleep Medicine Reviews, Cilt 7, No 4, 297-310, 2003.",
+        "[11] Buysse, D. J., Reynolds, C. F., Monk, T. H., Berman, S. R., Kupfer, D. J., \"The Pittsburgh Sleep Quality Index: A new instrument for psychiatric practice and research\", Psychiatry Research, Cilt 28, No 2, 193-213, 1989.",
         "[12] Pedregosa, F. ve ark., \"Scikit-learn: Machine learning in Python\", Journal of Machine Learning Research, Cilt 12, 2825-2830, 2011.",
-        "[13] Cover, T., Hart, P., \"Nearest neighbor pattern classification\", IEEE Trans. Inf. Theory, Cilt 13, No 1, 21-27, 1967.",
+        "[13] Cover, T. M., Hart, P. E., \"Nearest neighbor pattern classification\", IEEE Trans. Inf. Theory, Cilt 13, No 1, 21-27, 1967.",
         "[14] Cortes, C., Vapnik, V., \"Support-vector networks\", Machine Learning, Cilt 20, No 3, 273-297, 1995.",
         "[15] Breiman, L., \"Random Forests\", Machine Learning, Cilt 45, No 1, 5-32, 2001.",
         "[16] Friedman, J. H., \"Greedy function approximation: A gradient boosting machine\", Annals of Statistics, Cilt 29, No 5, 1189-1232, 2001.",
-        "[17] Prokhorenkova, L. ve ark., \"CatBoost: unbiased boosting with categorical features\", NeurIPS, Cilt 31, 6638-6648, 2018.",
-        "[18] Chawla, N. V. ve ark., \"SMOTE: Synthetic minority over-sampling technique\", Journal of Artificial Intelligence Research, Cilt 16, 321-357, 2002.",
-        "[19] Kaufman, S., Rosset, S., Perlich, C., Stitelman, O., \"Leakage in data mining: Formulation, detection, and avoidance\", ACM TKDD, Cilt 6, No 4, Article 15, 2012.",
-        "[20] Cawley, G. C., Talbot, N. L. C., \"On over-fitting in model selection and subsequent selection bias in performance evaluation\", JMLR, Cilt 11, 2079-2107, 2010.",
-        "[21] Chicco, D., Jurman, G., \"The advantages of the Matthews correlation coefficient (MCC) over F1 score and accuracy in binary classification evaluation\", BMC Genomics, Cilt 21, 6, 2020.",
+        "[17] Prokhorenkova, L., Gusev, G., Vorobev, A., Dorogush, A. V., Gulin, A., \"CatBoost: Unbiased boosting with categorical features\", Advances in Neural Information Processing Systems (NeurIPS), Cilt 31, 6639-6649, 2018.",
+        "[18] Chawla, N. V., Bowyer, K. W., Hall, L. O., Kegelmeyer, W. P., \"SMOTE: Synthetic minority over-sampling technique\", Journal of Artificial Intelligence Research, Cilt 16, 321-357, 2002.",
+        "[19] Kaufman, S., Rosset, S., Perlich, C., Stitelman, O., \"Leakage in data mining: Formulation, detection, and avoidance\", ACM TKDD, Cilt 6, No 4, Makale 15, 2012.",
+        "[20] Cawley, G. C., Talbot, N. L. C., \"On over-fitting in model selection and subsequent selection bias in performance evaluation\", Journal of Machine Learning Research, Cilt 11, 2079-2107, 2010.",
+        "[21] Chicco, D., Jurman, G., \"The advantages of the Matthews correlation coefficient (MCC) over F1 score and accuracy in binary classification evaluation\", BMC Genomics, Cilt 21, Makale 6, 2020.",
         "[22] Nadeau, C., Bengio, Y., \"Inference for the generalization error\", Machine Learning, Cilt 52, No 3, 239-281, 2003.",
-        "[23] Cohen, J., \"Weighted kappa: Nominal scale agreement provision for scaled disagreement or partial credit\", Psychological Bulletin, Cilt 70, No 4, 213-220, 1968.",
+        "[23] Cohen, J., \"Weighted kappa: Nominal scale agreement with provision for scaled disagreement or partial credit\", Psychological Bulletin, Cilt 70, No 4, 213-220, 1968.",
+        "[24] Chen, T., Guestrin, C., \"XGBoost: A scalable tree boosting system\", Proc. 22nd ACM SIGKDD International Conference on Knowledge Discovery and Data Mining, 785-794, 2016.",
     ]
     for k in kaynaklar:
         pk = doc.add_paragraph()

@@ -435,8 +435,10 @@ summary_mean.round(4).to_csv(OUT_TAB / "cv_ortalama.csv", encoding="utf-8-sig")
 summary_std.round(4).to_csv(OUT_TAB / "cv_std.csv", encoding="utf-8-sig")
 pd.concat(fold_results, names=["Model"]).to_csv(OUT_TAB / "cv_fold_detaylari.csv", encoding="utf-8-sig")
 
-# Azinlik Sinif Karsilastirma Tablosu (Tum Modeller: Agir + Orta + >=2 Sinif Uzak Hata)
+# Azinlik Sinif Karsilastirma Tablosu (Tum Modeller: Agir + Orta + Adet + >=2 Sinif Uzak Hata)
 df_min = pd.DataFrame(index=ordered_all)
+df_min["Agir_Yakalanan"] = [int(((y_arr == 3) & (oof_preds[m] == 3)).sum()) for m in ordered_all]
+df_min["Orta_Yakalanan"] = [int(((y_arr == 2) & (oof_preds[m] == 2)).sum()) for m in ordered_all]
 for col in ["Agir_Recall", "Agir_Precision", "Agir_Specificity", "Orta_Recall", "Orta_Precision", "Orta_F1"]:
     df_min[col] = summary_mean[col].round(4)
 df_min["Uzak_Hata_2Plus"] = summary_mean["Uzak_Hata_2Plus"].astype(int)
@@ -763,35 +765,86 @@ fig.suptitle("10-Kat Stratified CV: 9 Model ve Önsel Dummy Referans Karşılaş
 plt.tight_layout()
 save_fig(fig, OUT_FIG / "grafik_2_model_karsilastirma.png", dpi=200)
 
-# Grafik 3: 2x2 ROC ve Precision-Recall Egrileri (Hem AGIR %4,07 hem ORTA %8,30!)
+# Grafik 3: Sadeleştirilmiş ve Açıklayıcı 2x2 ROC & PR Eğrileri (5 Temsili Model)
 y_bin_all = label_binarize(y, classes=[0, 1, 2, 3])
-fig, axes = plt.subplots(2, 2, figsize=(11.8, 9.0))
-for r_idx, (cls_id, cls_tr) in enumerate([(3, "Ağır Risk (Severe, %4,07)"), (2, "Orta Risk (Moderate, %8,30)")]):
-    for idx, name in enumerate(real_models_sorted):
+REP_MODELS = [
+    ("CatBoost", "#1f6feb", "-", 2.6),
+    ("XGBoost", "#eb6834", "-", 2.1),
+    ("MLP (Sinir Ağı)", "#1baf7a", "-", 2.1),
+    ("LSVM", "#7b52ab", "--", 2.1),
+    ("kNN (k=5)", "#d9383a", "-.", 2.1),
+]
+fig, axes = plt.subplots(2, 2, figsize=(12.2, 9.6))
+legend_handles, legend_labels = [], []
+
+for r_idx, (cls_id, cls_tr, cls_short) in enumerate([
+    (3, "Ağır Risk (%4,07 — 4.066 Hasta)", "Ağır"),
+    (2, "Orta Risk (%8,30 — 8.299 Hasta)", "Orta"),
+]):
+    auc_parts, ap_parts = [], []
+    for name, col, ls, lw in REP_MODELS:
         s = oof_scores[name]
         fpr, tpr, _ = roc_curve(y_bin_all[:, cls_id], s[:, cls_id])
         auc_c = roc_auc_score(y_bin_all[:, cls_id], s[:, cls_id])
-        auc_str = f"{auc_c:.3f}".replace(".", ",")
-        axes[r_idx, 0].plot(fpr, tpr, color=PALETTE[idx % len(PALETTE)], label=f"{name} (AUC={auc_str})")
+        short_n = "MLP" if name.startswith("MLP") else ("kNN" if name.startswith("kNN") else name)
+        auc_parts.append(f"{short_n}: {f'{auc_c:.3f}'.replace('.', ',')}")
+        line_roc, = axes[r_idx, 0].plot(fpr, tpr, color=col, linestyle=ls, linewidth=lw, label=name)
+        if r_idx == 0:
+            legend_handles.append(line_roc)
+            legend_labels.append(name)
 
         prec_c, rec_c, _ = precision_recall_curve(y_bin_all[:, cls_id], s[:, cls_id])
         ap_c = average_precision_score(y_bin_all[:, cls_id], s[:, cls_id])
-        ap_str = f"{ap_c:.3f}".replace(".", ",")
-        axes[r_idx, 1].plot(rec_c, prec_c, color=PALETTE[idx % len(PALETTE)], label=f"{name} (AP={ap_str})")
+        ap_parts.append(f"{short_n}: {f'{ap_c:.3f}'.replace('.', ',')}")
+        axes[r_idx, 1].plot(rec_c, prec_c, color=col, linestyle=ls, linewidth=lw)
 
-    axes[r_idx, 0].plot([0, 1], [0, 1], color=RULE, linestyle="--", lw=1, label="Rastgele (0,500)")
-    axes[r_idx, 0].set(xlabel="Yanlış Pozitif Oranı (FPR)", ylabel="Doğru Pozitif Oranı (Recall)",
-                       title=f"ROC Eğrileri — {cls_tr}")
-    axes[r_idx, 0].legend(loc="lower right", fontsize=7.2)
+    base_roc, = axes[r_idx, 0].plot([0, 1], [0, 1], color="#888888", linestyle=":", lw=1.3, label="Rastgele / Prevalans")
+    if r_idx == 0:
+        legend_handles.append(base_roc)
+        legend_labels.append("Rastgele / Prevalans Tabanı")
+    axes[r_idx, 0].set(
+        xlabel="Yanlış Alarm Oranı — Sağlıklılar İçinde (FPR)",
+        ylabel="Yakalanan Hasta Oranı (Recall)",
+    )
+    axes[r_idx, 0].set_title(
+        f"ROC Eğrisi — {cls_tr}  [Sol üst = En iyi]\nAUC →  " + "  |  ".join(auc_parts),
+        fontsize=9.2, pad=8,
+    )
+    axes[r_idx, 0].text(
+        0.52, 0.24,
+        "ROC iyimser görünür:\nHasta olmayan kişi çok olduğundan\nzayıf modeller bile sol üste sıkışır.",
+        fontsize=8.3, color="#444444",
+        bbox=dict(boxstyle="round,pad=0.45", facecolor="#f8f8f5", edgecolor="#d0cfc7"),
+    )
 
     prev_c = float((y == cls_id).mean())
     prev_str = f"{prev_c:.3f}".replace(".", ",")
-    axes[r_idx, 1].axhline(prev_c, color=RULE, linestyle="--", lw=1, label=f"Prevalans ({prev_str})")
-    axes[r_idx, 1].set(xlabel="Duyarlılık (Recall)", ylabel="Kesinlik (Precision)",
-                       title=f"Precision–Recall Eğrileri — {cls_tr}")
-    axes[r_idx, 1].legend(loc="lower left", fontsize=7.2)
+    axes[r_idx, 1].axhline(prev_c, color="#888888", linestyle=":", lw=1.3)
+    axes[r_idx, 1].set(
+        xlabel="Yakalanan Hasta Oranı (Recall)",
+        ylabel="Alarmların Doğru Çıkma Oranı (Precision)",
+    )
+    axes[r_idx, 1].set_title(
+        f"Precision–Recall — {cls_tr}  [Sağ üst = En iyi]\nAP →  " + "  |  ".join(ap_parts),
+        fontsize=9.2, pad=8,
+    )
+    axes[r_idx, 1].text(
+        0.04 if r_idx == 0 else 0.14, 0.14 if r_idx == 0 else 0.53,
+        f"PR gerçeği gösterir (Taban: {prev_str}):\n"
+        + ("CatBoost en üstte, kNN dibe düşer." if r_idx == 0 else "LSVM ve kNN burada aşağı çakılır!"),
+        fontsize=8.3, color="#444444",
+        bbox=dict(boxstyle="round,pad=0.45", facecolor="#fffaf0", edgecolor="#e0cfa9"),
+    )
 
-plt.tight_layout()
+fig.suptitle(
+    "Ağır ve Orta Risk Sınıfları İçin ROC (İyimser) vs. Precision–Recall (Gerçekçi) Karşılaştırması — 5 Temsili Model",
+    fontsize=11.5, fontweight="bold", y=0.99,
+)
+fig.legend(
+    legend_handles, legend_labels,
+    loc="upper center", bbox_to_anchor=(0.5, 0.952), ncol=6, fontsize=8.8, frameon=False,
+)
+plt.tight_layout(rect=[0, 0, 1, 0.92])
 save_fig(fig, OUT_FIG / "grafik_3_roc_pr_egrileri.png", dpi=200)
 
 # Grafik 4: 3x3 OOF Karmasiklik Matrisleri
