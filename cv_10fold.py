@@ -1,11 +1,10 @@
 # =============================================================================
 # MAKINE OGRENMESI: SIZINTISIZ 10-KAT CAPRAZ DOGRULAMA VE KAPSAMLI DENEYLER
-# Uyku Sagligi ve Gunluk Performans - Cok Sinifli Uyku Bozuklugu Riski Tahmini
+# Uyku Sagligi ve Gunluk Performans - Cok Sinifli (Sirali) Uyku Bozuklugu Riski
 # Yalova Universitesi - Bilgisayar Muhendisligi (Uygulamali Ders Notu Uyumlu)
 # =============================================================================
 
 import json
-import os
 import sys
 import time
 import warnings
@@ -13,6 +12,7 @@ from pathlib import Path
 
 warnings.filterwarnings("ignore")
 
+import catboost
 import imblearn
 import matplotlib
 
@@ -24,7 +24,6 @@ import scipy
 from scipy.special import softmax
 import seaborn as sns
 import sklearn
-import catboost
 import xgboost
 
 from imblearn.over_sampling import SMOTE
@@ -38,6 +37,7 @@ from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
     classification_report,
+    cohen_kappa_score,
     confusion_matrix,
     f1_score,
     log_loss,
@@ -69,6 +69,11 @@ OUT_FIG = Path("grafikler")
 OUT_TAB.mkdir(parents=True, exist_ok=True)
 OUT_FIG.mkdir(parents=True, exist_ok=True)
 
+def save_fig(fig, path: Path, dpi: int = 200):
+    with open(path, "wb") as fp:
+        fig.savefig(fp, format="png", dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+
 VERSIONS = {
     "Python": sys.version.split()[0],
     "numpy": np.__version__,
@@ -82,12 +87,12 @@ VERSIONS = {
     "seaborn": sns.__version__,
 }
 
-print("=" * 74)
-print("SIZINTISIZ 10-KAT CAPRAZ DOGRULAMA VE DENEY SISTEMI BASLATILIYOR")
-print("=" * 74)
+print("=" * 76)
+print("SIZINTISIZ 10-KAT CV — SIRALI/DENGESIZ METRIKLER VE DENEYLER BASLIYOR")
+print("=" * 76)
 for k, v in VERSIONS.items():
     print(f"  {k:18s}: {v}")
-print("-" * 74)
+print("-" * 76)
 
 PALETTE = [
     "#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4",
@@ -123,27 +128,22 @@ RESULTS = {
 }
 
 # -----------------------------------------------------------------------------
-# 2. VERI YUKLEME, KALITE KONTROLLERI VE KLINIK OZELLIK MUHENDISLIGI
+# 2. VERI YUKLEME, KALITE VE SUPHELI YAPI KONTROLLERI
 # -----------------------------------------------------------------------------
 df_raw = pd.read_csv("sleep_health_dataset.csv")
 n_missing = int(df_raw.isna().sum().sum())
 n_dup_full = int(df_raw.duplicated().sum())
 n_dup_no_id = int(df_raw.drop(columns=["person_id"]).duplicated().sum())
 
-print(f"Ham veri boyutu            : {df_raw.shape}")
-print(f"Eksik deger (toplam)       : {n_missing}")
-print(f"Tekrar eden satir (tam)    : {n_dup_full}")
-print(f"Tekrar eden satir (ID haric): {n_dup_no_id}")
-
-# Bilgi sizintisi (target proxy) ve kimlik sutunlarini cikar
+# Kimlik ve hedef sonucu (post-hoc target proxy) sutunlarini cikar
 drop_cols = ["person_id", "cognitive_performance_score", "felt_rested"]
 df = df_raw.drop(columns=drop_cols).copy()
 
-# Satir bazli deterministik klinik ozellik muhendisligi (cross-sample sizinti yok)
+# Satir bazli deterministik klinik ozellik muhendisligi
 df["sleep_fragmentation_index"] = (df["wake_episodes_per_night"] / df["sleep_duration_hrs"]).round(4)
 df["restorative_sleep_ratio"] = (df["deep_sleep_percentage"] + df["rem_percentage"]).round(4)
 
-# Hedef degisken: acik sirali kodlama (Healthy=0 < Mild=1 < Moderate=2 < Severe=3)
+# Sirali hedef kodlamasi: Saglikli (0) < Hafif (1) < Orta (2) < Agir (3)
 CLASS_MAP = {"Healthy": 0, "Mild": 1, "Moderate": 2, "Severe": 3}
 CLASS_NAMES_TR = ["Sağlıklı (Healthy)", "Hafif (Mild)", "Orta (Moderate)", "Ağır (Severe)"]
 y = df["sleep_disorder_risk"].map(CLASS_MAP).astype(int)
@@ -155,14 +155,30 @@ cat_cols = [
 ]
 num_cols = [c for c in X.columns if c not in cat_cols]
 
+# Supheli yapi kontrolu: sabit sutunlar ve dogrusal bagimliliklar (Bölüm 3.7 / s. 93)
+const_cols = [c for c in X.columns if X[c].nunique() <= 1]
+corr_mat = X[num_cols].corr().abs()
+high_corr_pairs = []
+for c1 in num_cols:
+    for c2 in num_cols:
+        if c1 < c2 and corr_mat.loc[c1, c2] >= 0.70:
+            high_corr_pairs.append({
+                "sutun_1": c1, "sutun_2": c2, "korelasyon": round(float(corr_mat.loc[c1, c2]), 4)
+            })
+rsr_max_diff = float((X["restorative_sleep_ratio"] - (X["deep_sleep_percentage"] + X["rem_percentage"])).abs().max())
+
 counts = y.value_counts().sort_index()
 pcts = (y.value_counts(normalize=True).sort_index() * 100).round(2)
-print(f"Sayisal oznitelik: {len(num_cols)} | Kategorik (nominal) oznitelik: {len(cat_cols)}")
-print("Sinif dagilimi:")
-for idx, name in enumerate(CLASS_NAMES_TR):
-    print(f"  {idx} - {name:20s}: {counts[idx]:6d} (%{pcts[idx]:.2f})")
+
+print(f"Ham veri boyutu             : {df_raw.shape}")
+print(f"Eksik / Duplicate (ID haric): {n_missing} / {n_dup_no_id}")
+print(f"Sabit sutun sayisi          : {len(const_cols)}")
+print(f"RSR = deep + rem max fark   : {rsr_max_diff:.6f} (tam dogrusal toplam!)")
+print(f"Yuksek korelasyonlu cift (>=0.70): {high_corr_pairs}")
+print(f"Sayisal: {len(num_cols)} | Nominal kategorik: {len(cat_cols)}")
 
 RESULTS["dataset"] = {
+    "source": "Kaggle — Sleep Health and Daily Performance Dataset (not UCI; sentetik bileşen içerebilir)",
     "n_samples": int(len(df)),
     "n_raw_cols": int(df_raw.shape[1]),
     "n_features_before_ohe": int(X.shape[1]),
@@ -170,6 +186,9 @@ RESULTS["dataset"] = {
     "n_categorical": len(cat_cols),
     "n_missing": n_missing,
     "n_duplicates_no_id": n_dup_no_id,
+    "const_cols": const_cols,
+    "rsr_exact_linear_max_diff": rsr_max_diff,
+    "high_corr_pairs": high_corr_pairs,
     "class_counts": {CLASS_NAMES_TR[i]: int(counts[i]) for i in range(4)},
     "class_pcts": {CLASS_NAMES_TR[i]: float(pcts[i]) for i in range(4)},
 }
@@ -178,28 +197,25 @@ RESULTS["dataset"] = {
 fig, ax = plt.subplots(figsize=(7.5, 4.0))
 bars = ax.bar(CLASS_NAMES_TR, [counts[i] for i in range(4)], color=PALETTE[:4], width=0.55)
 for bar, i in zip(bars, range(4)):
+    cnt_tr = f"{counts[i]:,}".replace(",", ".")
+    pct_tr = f"{pcts[i]:.2f}".replace(".", ",")
     ax.text(
         bar.get_x() + bar.get_width() / 2,
         bar.get_height() + 900,
-        f"{counts[i]:,}\n(%{pcts[i]:.2f})",
+        f"{cnt_tr}\n(%{pct_tr})",
         ha="center", va="bottom", fontsize=9, fontweight="bold"
     )
 ax.set_ylabel("Örnek Sayısı")
-ax.set_title("Hedef Değişken Sınıf Dağılımı (100.000 Birey — Dengesiz Çok Sınıflı Yapı)")
+ax.set_title("Hedef Değişken Sınıf Dağılımı (100.000 Birey — Sıralı ve Dengesiz Yapı)")
 ax.set_ylim(0, max(counts) * 1.18)
 ax.grid(axis="x", visible=False)
 plt.tight_layout()
-fig.savefig(OUT_FIG / "grafik_1_sinif_dagilimi.png", dpi=200, bbox_inches="tight")
-plt.close(fig)
+save_fig(fig, OUT_FIG / "grafik_1_sinif_dagilimi.png", dpi=200)
 
 # -----------------------------------------------------------------------------
-# 3. SIZINTISIZ ON ISLEME (ColumnTransformer + Pipeline) VE MODELLER
+# 3. SIZINTISIZ ON ISLEME VE MODELLER
 # -----------------------------------------------------------------------------
 def make_preprocessor(scale_numeric: bool) -> ColumnTransformer:
-    """
-    Sayisal sutunlar: yalnizca olcege duyarli modellerde StandardScaler.
-    Nominal kategorik sutunlar: OneHotEncoder (her fold'un egitim kisminda fit edilir).
-    """
     return ColumnTransformer(
         transformers=[
             ("num", StandardScaler() if scale_numeric else "passthrough", num_cols),
@@ -209,13 +225,12 @@ def make_preprocessor(scale_numeric: bool) -> ColumnTransformer:
 
 def build_models():
     """
-    1 Referans (Dummy) + 9 Makine Ogrenmesi modeli.
-    Hicbir hiperparametre test/CV verisi uzerinde ayarlanmamistir (sizintisiz).
-    GaussianNB ve agac tabanli modeller olceklendirme gerektirmez (Tablo 11).
+    Dummy (Onsel / prior): predict() icin cogunluk sinifini, predict_proba() icin
+    egitim fold'undaki gercek sinif oranlarini dondurur (adil Log-Loss referansi).
     """
     return {
-        "Dummy (Çoğunluk)": Pipeline([
-            ("clf", DummyClassifier(strategy="most_frequent"))
+        "Dummy (Önsel / Prior)": Pipeline([
+            ("clf", DummyClassifier(strategy="prior"))
         ]),
         "CatBoost": Pipeline([
             ("prep", make_preprocessor(False)),
@@ -262,23 +277,16 @@ def build_models():
     }
 
 # -----------------------------------------------------------------------------
-# 4. METRIK HESAPLAMA VE 10-KAT STRATIFIED CROSS-VALIDATION (ddof=1, clone)
+# 4. METRIK HESAPLAMA (AGIRLIKLI FAZLALIKLAR YOK; SIRALI QWK & SINIF BAZLI VAR)
 # -----------------------------------------------------------------------------
-def weighted_specificity(y_true, y_pred):
-    cm = confusion_matrix(y_true, y_pred, labels=[0, 1, 2, 3])
-    specs, weights = [], []
-    total = cm.sum()
-    for i in range(4):
-        tp = cm[i, i]
-        fn = cm[i, :].sum() - tp
-        fp = cm[:, i].sum() - tp
-        tn = total - (tp + fn + fp)
-        specs.append(tn / (tn + fp) if (tn + fp) > 0 else 0.0)
-        weights.append(cm[i, :].sum() / total)
-    return float(sum(s * w for s, w in zip(specs, weights)))
+def class_specificity(y_true, y_pred, target_class: int) -> float:
+    """Belirli bir pozitif sinif icin OvR Ozgulluk = TN / (TN + FP)."""
+    y_t = (y_true == target_class).astype(int)
+    y_p = (y_pred == target_class).astype(int)
+    tn, fp, fn, tp = confusion_matrix(y_t, y_p, labels=[0, 1]).ravel()
+    return float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0
 
 def get_scores(fitted_model, X_eval):
-    """Olasilik tahmini varsa predict_proba, yoksa (SVM) softmax(decision_function)."""
     if hasattr(fitted_model, "predict_proba"):
         return fitted_model.predict_proba(X_eval), True
     df_scores = fitted_model.decision_function(X_eval)
@@ -286,24 +294,32 @@ def get_scores(fitted_model, X_eval):
 
 def compute_fold_metrics(y_true, y_pred, y_score, is_prob):
     y_bin = label_binarize(y_true, classes=[0, 1, 2, 3])
-    auroc = roc_auc_score(y_true, y_score, multi_class="ovr", average="weighted")
+    prec_c = precision_score(y_true, y_pred, labels=[0, 1, 2, 3], average=None, zero_division=0)
+    rec_c = recall_score(y_true, y_pred, labels=[0, 1, 2, 3], average=None, zero_division=0)
+    f1_c = f1_score(y_true, y_pred, labels=[0, 1, 2, 3], average=None, zero_division=0)
+
+    auroc_macro = roc_auc_score(y_true, y_score, multi_class="ovr", average="macro")
     aupr_macro = average_precision_score(y_bin, y_score, average="macro")
-    aupr_weighted = average_precision_score(y_bin, y_score, average="weighted")
     ll = log_loss(y_true, y_score, labels=[0, 1, 2, 3]) if is_prob else np.nan
+
     return {
         "Accuracy": accuracy_score(y_true, y_pred),
-        "Precision_W": precision_score(y_true, y_pred, average="weighted", zero_division=0),
-        "Recall_W": recall_score(y_true, y_pred, average="weighted", zero_division=0),
-        "F1_W": f1_score(y_true, y_pred, average="weighted", zero_division=0),
-        "Precision_M": precision_score(y_true, y_pred, average="macro", zero_division=0),
         "Recall_M": recall_score(y_true, y_pred, average="macro", zero_division=0),
         "F1_M": f1_score(y_true, y_pred, average="macro", zero_division=0),
-        "Specificity": weighted_specificity(y_true, y_pred),
         "MCC": matthews_corrcoef(y_true, y_pred),
-        "AUROC": auroc,
+        "Kappa": cohen_kappa_score(y_true, y_pred),
+        "QWK": cohen_kappa_score(y_true, y_pred, weights="quadratic"),
+        "AUROC_M": auroc_macro,
         "AUPR_M": aupr_macro,
-        "AUPR_W": aupr_weighted,
         "Log_Loss": ll,
+        # Birincil pozitif sinif: Agir (Severe = 3) ve en zor sinif: Orta (Moderate = 2)
+        "Agir_Recall": float(rec_c[3]),
+        "Agir_Precision": float(prec_c[3]),
+        "Agir_Specificity": class_specificity(y_true, y_pred, 3),
+        "Agir_F1": float(f1_c[3]),
+        "Orta_Recall": float(rec_c[2]),
+        "Orta_Precision": float(prec_c[2]),
+        "Orta_F1": float(f1_c[2]),
     }
 
 cv = StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=RANDOM_STATE)
@@ -314,23 +330,23 @@ oof_preds = {}
 oof_scores = {}
 train_cv_rows = []
 elapsed_times = {}
+catboost_fold_importances = []  # Sizintisiz: 10 egitim katlamasindan CatBoost onemi!
 
 print("\n[ADIM 1/4] 10-Kat Stratified CV Basliyor (100.000 Satir, Pipeline + OneHotEncoder)...")
-print("-" * 74)
+print("-" * 76)
 
 for name, est in models.items():
-    print(f">> {name:20s} ... ", end="", flush=True)
+    print(f">> {name:22s} ... ", end="", flush=True)
     t0 = time.time()
     rows = []
     oof_p = np.zeros(len(y), dtype=int)
     oof_s = np.zeros((len(y), 4), dtype=float)
-    tr_f1_w_list, tr_f1_m_list = [], []
+    tr_f1_m_list = []
 
     for fold, (tr_idx, te_idx) in enumerate(cv.split(X, y), start=1):
         X_tr, X_te = X.iloc[tr_idx], X.iloc[te_idx]
         y_tr, y_te = y.iloc[tr_idx], y.iloc[te_idx]
 
-        # RBF SVM O(N^2) karmasikligi nedeniyle egitim fold'u 25.000 ile sinirlanir
         if name == "RBF SVM" and len(X_tr) > 25000:
             X_tr, _, y_tr, _ = train_test_split(
                 X_tr, y_tr, train_size=25000, random_state=RANDOM_STATE, stratify=y_tr
@@ -338,19 +354,32 @@ for name, est in models.items():
 
         fitted = clone(est).fit(X_tr, y_tr)
 
-        # Egitim skoru (Overfitting analizi icin)
+        # CatBoost oznitelik onemini yalnizca egitim fold'undan topla (sizintisiz!)
+        if name == "CatBoost":
+            f_names = fitted.named_steps["prep"].get_feature_names_out()
+            f_imps = fitted.named_steps["clf"].get_feature_importance()
+            agg = {}
+            for fn, iv in zip(f_names, f_imps):
+                if fn.startswith("num__"):
+                    orig = fn.replace("num__", "")
+                elif fn.startswith("cat__"):
+                    rest = fn.replace("cat__", "")
+                    orig = next((c for c in cat_cols if rest.startswith(c + "_")), rest)
+                else:
+                    orig = fn
+                agg[orig] = agg.get(orig, 0.0) + float(iv)
+            catboost_fold_importances.append(agg)
+
         tr_pred = np.ravel(fitted.predict(X_tr))
-        tr_f1_w_list.append(f1_score(y_tr, tr_pred, average="weighted", zero_division=0))
         tr_f1_m_list.append(f1_score(y_tr, tr_pred, average="macro", zero_division=0))
 
-        # Dogrulama tahmini ve olasilik/skor
         te_pred = np.ravel(fitted.predict(X_te))
         te_score, is_prob = get_scores(fitted, X_te)
 
         oof_p[te_idx] = te_pred
         oof_s[te_idx] = te_score
 
-        m = compute_fold_metrics(y_te, te_pred, te_score, is_prob)
+        m = compute_fold_metrics(y_te.to_numpy(), te_pred, te_score, is_prob)
         m["fold"] = fold
         rows.append(m)
 
@@ -367,67 +396,64 @@ for name, est in models.items():
         "CV_F1_Macro_Ort": float(df_f["F1_M"].mean()),
         "CV_F1_Macro_Std": float(df_f["F1_M"].std(ddof=1)),
         "Fark_Macro": float(np.mean(tr_f1_m_list) - df_f["F1_M"].mean()),
-        "Egitim_F1_Weighted": float(np.mean(tr_f1_w_list)),
-        "CV_F1_Weighted_Ort": float(df_f["F1_W"].mean()),
-        "CV_F1_Weighted_Std": float(df_f["F1_W"].std(ddof=1)),
-        "Fark_Weighted": float(np.mean(tr_f1_w_list) - df_f["F1_W"].mean()),
     })
 
     print(
         f"Tamam ({elapsed:5.1f}s) | Acc: {df_f['Accuracy'].mean():.4f} | "
-        f"Macro F1: {df_f['F1_M'].mean():.4f} (+/-{df_f['F1_M'].std(ddof=1):.4f}) | "
-        f"MCC: {df_f['MCC'].mean():.4f}"
+        f"MacroRec: {df_f['Recall_M'].mean():.4f} | MacroF1: {df_f['F1_M'].mean():.4f} | "
+        f"MCC: {df_f['MCC'].mean():.4f} | QWK: {df_f['QWK'].mean():.4f}"
     )
 
 # Ozet Tablolar (ddof=1 orneklem standart sapmasi)
 METRIC_COLS = [
-    "Accuracy", "Precision_W", "Recall_W", "F1_W",
-    "Precision_M", "Recall_M", "F1_M",
-    "Specificity", "MCC", "AUROC", "AUPR_M", "AUPR_W", "Log_Loss"
+    "Accuracy", "Recall_M", "F1_M", "MCC", "Kappa", "QWK",
+    "AUROC_M", "AUPR_M", "Log_Loss",
+    "Agir_Recall", "Agir_Precision", "Agir_Specificity", "Agir_F1",
+    "Orta_Recall", "Orta_Precision", "Orta_F1",
 ]
 summary_mean = pd.DataFrame({n: f[METRIC_COLS].mean() for n, f in fold_results.items()}).T
 summary_std = pd.DataFrame({n: f[METRIC_COLS].std(ddof=1) for n, f in fold_results.items()}).T
 summary_mean["Sure_sn"] = pd.Series(elapsed_times)
 
-# MCC'ye gore sirala (Dummy en altta)
+DUMMY_NAME = "Dummy (Önsel / Prior)"
 real_models_sorted = (
-    summary_mean.drop(index=["Dummy (Çoğunluk)"])
+    summary_mean.drop(index=[DUMMY_NAME])
     .sort_values("MCC", ascending=False)
     .index.tolist()
 )
-ordered_all = real_models_sorted + ["Dummy (Çoğunluk)"]
+ordered_all = real_models_sorted + [DUMMY_NAME]
 summary_mean = summary_mean.loc[ordered_all]
 summary_std = summary_std.loc[ordered_all]
 
+# >= 2 sinif uzak kritik hata sayisi (OOF)
+y_arr = y.to_numpy()
+summary_mean["Uzak_Hata_2Plus"] = [
+    int((np.abs(y_arr - oof_preds[m]) >= 2).sum()) for m in ordered_all
+]
+
 summary_mean.round(4).to_csv(OUT_TAB / "cv_ortalama.csv", encoding="utf-8-sig")
 summary_std.round(4).to_csv(OUT_TAB / "cv_std.csv", encoding="utf-8-sig")
-
-# Formatli ana tablo
-df_fmt = pd.DataFrame(index=ordered_all)
-for col in ["Accuracy", "F1_W", "F1_M", "MCC", "Specificity", "AUROC", "AUPR_M", "Log_Loss"]:
-    df_fmt[col] = [
-        f"{summary_mean.loc[m, col]:.4f} ± {summary_std.loc[m, col]:.4f}"
-        if pd.notna(summary_mean.loc[m, col]) else "—"
-        for m in ordered_all
-    ]
-df_fmt["Sure_sn"] = summary_mean["Sure_sn"].round(2)
-df_fmt.to_csv(OUT_TAB / "cv_sonuc_tablosu.csv", encoding="utf-8-sig")
-
-# Fold bazinda tum sonuclar
 pd.concat(fold_results, names=["Model"]).to_csv(OUT_TAB / "cv_fold_detaylari.csv", encoding="utf-8-sig")
+
+# Azinlik Sinif Karsilastirma Tablosu (Tum Modeller: Agir + Orta + >=2 Sinif Uzak Hata)
+df_min = pd.DataFrame(index=ordered_all)
+for col in ["Agir_Recall", "Agir_Precision", "Agir_Specificity", "Orta_Recall", "Orta_Precision", "Orta_F1"]:
+    df_min[col] = summary_mean[col].round(4)
+df_min["Uzak_Hata_2Plus"] = summary_mean["Uzak_Hata_2Plus"].astype(int)
+df_min.to_csv(OUT_TAB / "azinlik_sinif_karsilastirma.csv", encoding="utf-8-sig")
 
 # Egitim vs CV (Overfitting) tablosu
 df_train_cv = pd.DataFrame(train_cv_rows).set_index("Model").loc[ordered_all]
 df_train_cv.round(4).to_csv(OUT_TAB / "egitim_cv_karsilastirma.csv", encoding="utf-8-sig")
 
-# Eslestirilmis Fold Farklari (Referans: en yuksek MCC'li model)
+# Eslestirilmis Fold Farklari (Yalnizca gercek modeller — Dummy haric!)
 best_model = real_models_sorted[0]
 paired_rows = []
-for other in ordered_all:
+for other in real_models_sorted:
     if other == best_model:
         continue
     row = {"Diger_Model": other}
-    for m in ["MCC", "F1_M", "AUPR_M"]:
+    for m in ["MCC", "F1_M", "QWK", "AUPR_M"]:
         diff = fold_results[best_model][m].to_numpy() - fold_results[other][m].to_numpy()
         wins = int((diff > 1e-12).sum())
         losses = int((diff < -1e-12).sum())
@@ -447,15 +473,45 @@ rep_dict = classification_report(
 pd.DataFrame(rep_dict).T.round(4).to_csv(OUT_TAB / "sinif_bazinda_rapor.csv", encoding="utf-8-sig")
 
 cm_best = confusion_matrix(y, oof_preds[best_model], labels=[0, 1, 2, 3])
-df_cm_best = pd.DataFrame(cm_best, index=CLASS_NAMES_TR, columns=CLASS_NAMES_TR)
-df_cm_best.to_csv(OUT_TAB / "sampiyon_confusion_matrix.csv", encoding="utf-8-sig")
+pd.DataFrame(cm_best, index=CLASS_NAMES_TR, columns=CLASS_NAMES_TR).to_csv(
+    OUT_TAB / "sampiyon_confusion_matrix.csv", encoding="utf-8-sig"
+)
 
-# Verimlilik tablosu (tum gercek modeller)
+# Prevalansa Gore Varsayimsal PPV Tablosu (Ders Notu Bolum 8.6, Tablo 47 — Koddan Hesapli!)
+y_sev_true = (y_arr == 3).astype(int)
+y_sev_pred = (oof_preds[best_model] == 3).astype(int)
+tn_s, fp_s, fn_s, tp_s = confusion_matrix(y_sev_true, y_sev_pred, labels=[0, 1]).ravel()
+sev_rec_oof = tp_s / (tp_s + fn_s)
+sev_spec_oof = tn_s / (tn_s + fp_s)
+actual_prev = float(y_sev_true.mean())
+
+ppv_rows = []
+for p_val, aciklama in [
+    (actual_prev, "Veri setindeki oran (OOF Precision ile uyumlu)"),
+    (0.02, "Varsayımsal genel klinik tarama (%2)"),
+    (0.01, "Varsayımsal düşük prevalanslı tarama (%1)"),
+    (0.005, "Varsayımsal nadir tarama (%0,5)"),
+]:
+    ppv = (sev_rec_oof * p_val) / (sev_rec_oof * p_val + (1.0 - sev_spec_oof) * (1.0 - p_val))
+    ppv_rows.append({
+        "Prevalans": p_val,
+        "Recall_Sabit": sev_rec_oof,
+        "Specificity_Sabit": sev_spec_oof,
+        "PPV": ppv,
+        "Yorum": aciklama,
+    })
+df_ppv = pd.DataFrame(ppv_rows)
+df_ppv.round(4).to_csv(OUT_TAB / "ppv_prevalans_tablosu.csv", index=False, encoding="utf-8-sig")
+print("\nPrevalansa Gore Varsayimsal PPV (CatBoost — Agir Sinif):")
+print(df_ppv[["Prevalans", "PPV", "Yorum"]].round(4).to_string(index=False))
+
+# Verimlilik tablosu
 df_eff = pd.DataFrame({
     "Model": real_models_sorted,
     "Accuracy": [summary_mean.loc[m, "Accuracy"] for m in real_models_sorted],
-    "F1_Macro": [summary_mean.loc[m, "F1_M"] for m in real_models_sorted],
+    "Macro_Recall": [summary_mean.loc[m, "Recall_M"] for m in real_models_sorted],
     "MCC": [summary_mean.loc[m, "MCC"] for m in real_models_sorted],
+    "QWK": [summary_mean.loc[m, "QWK"] for m in real_models_sorted],
     "Sure_sn": [summary_mean.loc[m, "Sure_sn"] for m in real_models_sorted],
 }).round(4)
 df_eff.to_csv(OUT_TAB / "verimlilik_tablosu.csv", index=False, encoding="utf-8-sig")
@@ -485,9 +541,7 @@ for d in depths:
     })
 df_depth = pd.DataFrame(depth_rows)
 df_depth.round(4).to_csv(OUT_TAB / "derinlik_taramasi.csv", index=False, encoding="utf-8-sig")
-print(df_depth.round(4).to_string(index=False))
 
-# Ogrenme egrisi (5-fold StratifiedKFold, 5 boyut)
 cv5 = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
 lc_models = {
     "Karar Ağacı (max_depth=2)": Pipeline([
@@ -520,22 +574,19 @@ for m_name, m_est in lc_models.items():
             "CV_F1_Macro_Ort": float(va_r.mean()),
             "CV_F1_Macro_Std": float(va_r.std(ddof=1)),
         })
-df_lc = pd.DataFrame(lc_rows)
-df_lc.round(4).to_csv(OUT_TAB / "ogrenme_egrileri.csv", index=False, encoding="utf-8-sig")
+pd.DataFrame(lc_rows).round(4).to_csv(OUT_TAB / "ogrenme_egrileri.csv", index=False, encoding="utf-8-sig")
 
 # -----------------------------------------------------------------------------
-# 6. [ADIM 3/4] SINIF DENGESIZLIGI DENEYI (class_weight & SMOTE Pipeline Icinde)
-#    + SMOTE SIZINTI DENEYI (Bolum 7.3 - 7.4)
+# 6. [ADIM 3/4] SINIF DENGESIZLIGI DENEYI + SMOTE SIZINTI DENEYI
 # -----------------------------------------------------------------------------
 print("\n[ADIM 3/4] Sinif Dengesizligi Deneyi (20.000 Tabakali Orneklem, 10-Kat CV)...")
 X_imb, _, y_imb, _ = train_test_split(
     X, y, train_size=20000, random_state=RANDOM_STATE, stratify=y
 )
-X_imb = X_imb.reset_index(drop=True)
-y_imb = y_imb.reset_index(drop=True)
+X_imb, y_imb = X_imb.reset_index(drop=True), y_imb.reset_index(drop=True)
 
 imb_models = {
-    "Dummy (Çoğunluk)": Pipeline([("clf", DummyClassifier(strategy="most_frequent"))]),
+    DUMMY_NAME: Pipeline([("clf", DummyClassifier(strategy="prior"))]),
     "LR (Sade)": Pipeline([
         ("prep", make_preprocessor(True)),
         ("clf", LogisticRegression(max_iter=1000, random_state=RANDOM_STATE)),
@@ -560,7 +611,7 @@ imb_models = {
         )),
     ]),
     "RF + SMOTE (Pipeline)": ImbPipeline([
-        ("prep", make_preprocessor(True)),  # SMOTE mesafe kullandigi icin olcekleme once gelir
+        ("prep", make_preprocessor(True)),
         ("smote", SMOTE(random_state=RANDOM_STATE)),
         ("clf", RandomForestClassifier(n_estimators=100, random_state=RANDOM_STATE, n_jobs=2)),
     ]),
@@ -568,7 +619,7 @@ imb_models = {
 
 imb_rows = []
 for name, est in imb_models.items():
-    accs, f1m, rec_mod, rec_sev, mccs, auprs = [], [], [], [], [], []
+    accs, f1m, rec_mod, rec_sev, mccs, qwks, auprs = [], [], [], [], [], [], []
     for tr_idx, te_idx in cv.split(X_imb, y_imb):
         fitted = clone(est).fit(X_imb.iloc[tr_idx], y_imb.iloc[tr_idx])
         pred = fitted.predict(X_imb.iloc[te_idx])
@@ -581,35 +632,35 @@ for name, est in imb_models.items():
         rec_mod.append(rec_per_class[2])
         rec_sev.append(rec_per_class[3])
         mccs.append(matthews_corrcoef(y_te, pred))
+        qwks.append(cohen_kappa_score(y_te, pred, weights="quadratic"))
         auprs.append(average_precision_score(y_bin, prob, average="macro"))
     imb_rows.append({
         "Model": name,
         "Accuracy_Ort": np.mean(accs), "Accuracy_Std": np.std(accs, ddof=1),
         "F1_Macro_Ort": np.mean(f1m), "F1_Macro_Std": np.std(f1m, ddof=1),
-        "Recall_Orta_Ort": np.mean(rec_mod), "Recall_Orta_Std": np.std(rec_mod, ddof=1),
-        "Recall_Agir_Ort": np.mean(rec_sev), "Recall_Agir_Std": np.std(rec_sev, ddof=1),
-        "MCC_Ort": np.mean(mccs), "MCC_Std": np.std(mccs, ddof=1),
-        "AUPR_Macro_Ort": np.mean(auprs), "AUPR_Macro_Std": np.std(auprs, ddof=1),
+        "Recall_Orta_Ort": np.mean(rec_mod), "Recall_Agir_Ort": np.mean(rec_sev),
+        "MCC_Ort": np.mean(mccs), "QWK_Ort": np.mean(qwks),
+        "AUPR_Macro_Ort": np.mean(auprs),
     })
 df_imb = pd.DataFrame(imb_rows).set_index("Model")
 df_imb.round(4).to_csv(OUT_TAB / "dengesizlik_deneyi.csv", encoding="utf-8-sig")
-print(df_imb[["Accuracy_Ort", "F1_Macro_Ort", "Recall_Orta_Ort", "Recall_Agir_Ort", "MCC_Ort"]].round(4).to_string())
 
-# SMOTE Sizinti Deneyi (Yanlis: CV oncesi SMOTE vs Dogru: Pipeline icinde SMOTE)
+# SMOTE Sizinti Deneyi
 prep_all = make_preprocessor(True)
 X_imb_enc = prep_all.fit_transform(X_imb)
 X_res, y_res = SMOTE(random_state=RANDOM_STATE).fit_resample(X_imb_enc, y_imb)
+y_res_arr = np.asarray(y_res)
 n_orig = len(y_imb)
-is_orig = np.arange(len(y_res)) < n_orig
+is_orig = np.arange(len(y_res_arr)) < n_orig
 
 leak_f1m, leak_rec_sev, leak_mcc = [], [], []
-for tr_idx, te_idx in cv.split(X_res, y_res):
+for tr_idx, te_idx in cv.split(X_res, y_res_arr):
     rf_leak = RandomForestClassifier(n_estimators=100, random_state=RANDOM_STATE, n_jobs=2).fit(
-        X_res[tr_idx], y_res.iloc[tr_idx]
+        X_res[tr_idx], y_res_arr[tr_idx]
     )
     te_real = te_idx[is_orig[te_idx]]
     pred_l = rf_leak.predict(X_res[te_real])
-    y_te_real = y_res.iloc[te_real]
+    y_te_real = y_res_arr[te_real]
     rec_c = recall_score(y_te_real, pred_l, labels=[0, 1, 2, 3], average=None, zero_division=0)
     leak_f1m.append(f1_score(y_te_real, pred_l, average="macro", zero_division=0))
     leak_rec_sev.append(rec_c[3])
@@ -630,32 +681,14 @@ df_smote_leak = pd.DataFrame([
     },
 ]).set_index("Yontem")
 df_smote_leak.round(4).to_csv(OUT_TAB / "smote_sizinti_deneyi.csv", encoding="utf-8-sig")
-print("\nSMOTE Sizinti Deneyi:")
-print(df_smote_leak.round(4).to_string())
 
 # -----------------------------------------------------------------------------
-# 7. [ADIM 4/4] OZNITELIK ONEM ANALIZI (One-Hot Toplanmis, Betimleyici)
+# 7. [ADIM 4/4] SAMPIYON MODEL (CATBOOST) 10-KAT EGITIM FOLD OZNITELIK ONEMI
 # -----------------------------------------------------------------------------
-print("\n[ADIM 4/4] Oznitelik Onem Analizi ve Grafikler Uretiliyor...")
-rf_full = Pipeline([
-    ("prep", make_preprocessor(False)),
-    ("clf", RandomForestClassifier(n_estimators=100, random_state=RANDOM_STATE, n_jobs=2)),
-]).fit(X, y)
-
-feat_names_out = rf_full.named_steps["prep"].get_feature_names_out()
-importances_raw = rf_full.named_steps["clf"].feature_importances_
-
-# One-hot sutunlari ana oznitelik adina geri topla
-agg_imp = {}
-for fname, imp in zip(feat_names_out, importances_raw):
-    if fname.startswith("num__"):
-        orig = fname.replace("num__", "")
-    elif fname.startswith("cat__"):
-        rest = fname.replace("cat__", "")
-        orig = next((c for c in cat_cols if rest.startswith(c + "_")), rest)
-    else:
-        orig = fname
-    agg_imp[orig] = agg_imp.get(orig, 0.0) + float(imp)
+print("\n[ADIM 4/4] CatBoost 10-Kat Egitim Fold Oznitelik Onemi ve Grafikler Uretiliyor...")
+df_cb_imp_folds = pd.DataFrame(catboost_fold_importances)
+cb_imp_mean = df_cb_imp_folds.mean(axis=0)
+cb_imp_std = df_cb_imp_folds.std(axis=0, ddof=1)
 
 TR_LABEL_MAP = {
     "sleep_quality_score": "Uyku Kalite Skoru (sleep_quality)",
@@ -694,71 +727,74 @@ df_imp = pd.DataFrame([
     {
         "Ozellik": TR_LABEL_MAP.get(k, k),
         "Orijinal_Sutun": k,
-        "Onem_Skoru": v,
-        "Yuzde_Etki": v * 100.0,
+        "Onem_Ort": float(cb_imp_mean[k]),
+        "Onem_Std": float(cb_imp_std[k]),
     }
-    for k, v in agg_imp.items()
-]).sort_values("Onem_Skoru", ascending=False).reset_index(drop=True)
+    for k in cb_imp_mean.index
+]).sort_values("Onem_Ort", ascending=False).reset_index(drop=True)
 df_imp.round(4).to_csv(OUT_TAB / "ozellik_onem_tablosu.csv", index=False, encoding="utf-8-sig")
+print("CatBoost En Etkili Ilk 8 Oznitelik (10 Egitim Fold Ort +/- Std):")
+print(df_imp.head(8)[["Ozellik", "Onem_Ort", "Onem_Std"]].round(2).to_string(index=False))
 
 # -----------------------------------------------------------------------------
-# 8. GRAFIKLER (Ders Notu Stiline Uygun Yuksek Cozunurluklu Ciktilar)
+# 8. GRAFIKLER
 # -----------------------------------------------------------------------------
 
-# Grafik 2: Model Karsilastirma (2x2 Errorbar: Accuracy, Macro F1, MCC, AUPR_M)
+# Grafik 2: Model Karsilastirma (2x2 Errorbar: Macro Recall, Macro F1, MCC, QWK)
 fig, axes = plt.subplots(2, 2, figsize=(10.5, 7.2), sharey=True)
 ypos = np.arange(len(ordered_all))
 for ax, (col, title) in zip(
     axes.ravel(),
     [
-        ("Accuracy", "Doğruluk — Accuracy (ort ± std)"),
+        ("Recall_M", "Macro Recall / Dengeli Doğruluk (ort ± std)"),
         ("F1_M", "Macro F1-Skoru (ort ± std)"),
         ("MCC", "Matthews Korelasyon Katsayısı — MCC (ort ± std)"),
-        ("AUPR_M", "Macro AUPR / Average Precision (ort ± std)"),
+        ("QWK", "Quadratic Weighted Kappa — Sıralı Uyum (ort ± std)"),
     ],
 ):
     mu = summary_mean.loc[ordered_all, col].to_numpy()
     sd = summary_std.loc[ordered_all, col].to_numpy()
     ax.errorbar(mu, ypos, xerr=sd, fmt="o", color=PALETTE[0], ms=6, elinewidth=1.2, capsize=3)
     ax.set_yticks(ypos, ordered_all)
-    ax.invert_yaxis()
     ax.set_title(title)
     ax.grid(axis="y", visible=False)
-fig.suptitle("10-Kat Stratified CV: 9 Model ve Dummy Referans Karşılaştırması (100.000 Satır)", fontweight="bold")
+axes[0, 0].invert_yaxis()
+fig.suptitle("10-Kat Stratified CV: 9 Model ve Önsel Dummy Referans Karşılaştırması (100.000 Satır)", fontweight="bold")
 plt.tight_layout()
-fig.savefig(OUT_FIG / "grafik_2_model_karsilastirma.png", dpi=200, bbox_inches="tight")
-plt.close(fig)
+save_fig(fig, OUT_FIG / "grafik_2_model_karsilastirma.png", dpi=200)
 
-# Grafik 3: ROC ve Precision-Recall Egrileri (OOF — Agir Risk Sinifi & Macro)
+# Grafik 3: 2x2 ROC ve Precision-Recall Egrileri (Hem AGIR %4,07 hem ORTA %8,30!)
 y_bin_all = label_binarize(y, classes=[0, 1, 2, 3])
-fig, axes = plt.subplots(1, 2, figsize=(11.5, 4.8))
-for idx, name in enumerate(real_models_sorted):
-    s = oof_scores[name]
-    # Agir (Severe = sinif 3) icin ROC ve PR (klinik olarak en kritik azinlik sinifi: %4.07)
-    fpr, tpr, _ = roc_curve(y_bin_all[:, 3], s[:, 3])
-    auc_s3 = roc_auc_score(y_bin_all[:, 3], s[:, 3])
-    axes[0].plot(fpr, tpr, color=PALETTE[idx % len(PALETTE)], label=f"{name} (AUC={auc_s3:.3f})")
+fig, axes = plt.subplots(2, 2, figsize=(11.8, 9.0))
+for r_idx, (cls_id, cls_tr) in enumerate([(3, "Ağır Risk (Severe, %4,07)"), (2, "Orta Risk (Moderate, %8,30)")]):
+    for idx, name in enumerate(real_models_sorted):
+        s = oof_scores[name]
+        fpr, tpr, _ = roc_curve(y_bin_all[:, cls_id], s[:, cls_id])
+        auc_c = roc_auc_score(y_bin_all[:, cls_id], s[:, cls_id])
+        auc_str = f"{auc_c:.3f}".replace(".", ",")
+        axes[r_idx, 0].plot(fpr, tpr, color=PALETTE[idx % len(PALETTE)], label=f"{name} (AUC={auc_str})")
 
-    prec_c, rec_c, _ = precision_recall_curve(y_bin_all[:, 3], s[:, 3])
-    ap_s3 = average_precision_score(y_bin_all[:, 3], s[:, 3])
-    axes[1].plot(rec_c, prec_c, color=PALETTE[idx % len(PALETTE)], label=f"{name} (AP={ap_s3:.3f})")
+        prec_c, rec_c, _ = precision_recall_curve(y_bin_all[:, cls_id], s[:, cls_id])
+        ap_c = average_precision_score(y_bin_all[:, cls_id], s[:, cls_id])
+        ap_str = f"{ap_c:.3f}".replace(".", ",")
+        axes[r_idx, 1].plot(rec_c, prec_c, color=PALETTE[idx % len(PALETTE)], label=f"{name} (AP={ap_str})")
 
-axes[0].plot([0, 1], [0, 1], color=RULE, linestyle="--", lw=1, label="Rastgele (0,500)")
-axes[0].set(xlabel="Yanlış Pozitif Oranı (FPR)", ylabel="Doğru Pozitif Oranı (Recall)",
-            title="ROC Eğrileri — Ağır Risk (Severe) Sınıfı (OOF)")
-axes[0].legend(loc="lower right", fontsize=7.5)
+    axes[r_idx, 0].plot([0, 1], [0, 1], color=RULE, linestyle="--", lw=1, label="Rastgele (0,500)")
+    axes[r_idx, 0].set(xlabel="Yanlış Pozitif Oranı (FPR)", ylabel="Doğru Pozitif Oranı (Recall)",
+                       title=f"ROC Eğrileri — {cls_tr}")
+    axes[r_idx, 0].legend(loc="lower right", fontsize=7.2)
 
-prev_s3 = float((y == 3).mean())
-axes[1].axhline(prev_s3, color=RULE, linestyle="--", lw=1, label=f"Taban / Prevalans ({prev_s3:.3f})")
-axes[1].set(xlabel="Duyarlılık (Recall)", ylabel="Kesinlik (Precision)",
-            title="Precision–Recall Eğrileri — Ağır Risk (Severe) Sınıfı (OOF)")
-axes[1].legend(loc="lower left", fontsize=7.5)
+    prev_c = float((y == cls_id).mean())
+    prev_str = f"{prev_c:.3f}".replace(".", ",")
+    axes[r_idx, 1].axhline(prev_c, color=RULE, linestyle="--", lw=1, label=f"Prevalans ({prev_str})")
+    axes[r_idx, 1].set(xlabel="Duyarlılık (Recall)", ylabel="Kesinlik (Precision)",
+                       title=f"Precision–Recall Eğrileri — {cls_tr}")
+    axes[r_idx, 1].legend(loc="lower left", fontsize=7.2)
 
 plt.tight_layout()
-fig.savefig(OUT_FIG / "grafik_3_roc_pr_egrileri.png", dpi=200, bbox_inches="tight")
-plt.close(fig)
+save_fig(fig, OUT_FIG / "grafik_3_roc_pr_egrileri.png", dpi=200)
 
-# Grafik 4: 3x3 OOF Karmasiklik Matrisleri (9 gercek model)
+# Grafik 4: 3x3 OOF Karmasiklik Matrisleri
 short_labels = ["Sağlıklı", "Hafif", "Orta", "Ağır"]
 fig, axes = plt.subplots(3, 3, figsize=(15.5, 13.5))
 for ax, name in zip(axes.ravel(), real_models_sorted):
@@ -767,28 +803,31 @@ for ax, name in zip(axes.ravel(), real_models_sorted):
         cm, annot=True, fmt="d", cmap="Blues", cbar=False, ax=ax,
         xticklabels=short_labels, yticklabels=short_labels, annot_kws={"size": 9}
     )
-    ax.set_title(f"{name} (MCC={summary_mean.loc[name, 'MCC']:.3f})", fontweight="bold")
+    mcc_s = f"{summary_mean.loc[name, 'MCC']:.3f}".replace(".", ",")
+    qwk_s = f"{summary_mean.loc[name, 'QWK']:.3f}".replace(".", ",")
+    ax.set_title(f"{name} (MCC={mcc_s} | QWK={qwk_s})", fontweight="bold")
     ax.set_xlabel("Tahmin Edilen Sınıf")
     ax.set_ylabel("Gerçek Sınıf")
 fig.suptitle("10-Kat Çapraz Doğrulama Birleşik (Out-of-Fold) Karmaşıklık Matrisleri (100.000 Örnek)", fontsize=13, fontweight="bold", y=0.995)
 plt.tight_layout()
-fig.savefig(OUT_FIG / "grafik_4_confusion_matrices.png", dpi=180, bbox_inches="tight")
-plt.close(fig)
+save_fig(fig, OUT_FIG / "grafik_4_confusion_matrices.png", dpi=180)
 
-# Grafik 5: Oznitelik Onem Duzeyleri (Ilk 15)
+# Grafik 5: CatBoost Oznitelik Onem Duzeyleri (10 Egitim Fold Ort +/- Std)
 top15 = df_imp.head(15).iloc[::-1]
-fig, ax = plt.subplots(figsize=(8.8, 5.6))
+fig, ax = plt.subplots(figsize=(9.0, 5.8))
 colors_imp = ["#eb6834" if "Türetilmiş" in x else "#2a78d6" for x in top15["Ozellik"]]
-bars = ax.barh(top15["Ozellik"], top15["Yuzde_Etki"], color=colors_imp)
-for bar, val in zip(bars, top15["Yuzde_Etki"]):
-    ax.text(val + 0.25, bar.get_y() + bar.get_height() / 2, f"%{val:.2f}", va="center", fontsize=8.5)
-ax.set_xlabel("Önem Payı (%) — Gini Katsayısı (One-Hot Toplanmış)")
-ax.set_title("Uyku Bozukluğu Riskini Belirleyen En Etkili 15 Öznitelik (Turuncu: Türetilmiş Klinik Metrik)")
-ax.set_xlim(0, top15["Yuzde_Etki"].max() * 1.16)
+bars = ax.barh(
+    top15["Ozellik"], top15["Onem_Ort"], xerr=top15["Onem_Std"],
+    color=colors_imp, capsize=2.5, error_kw={"elinewidth": 1.0}
+)
+for bar, val, sd in zip(bars, top15["Onem_Ort"], top15["Onem_Std"]):
+    ax.text(val + sd + 0.30, bar.get_y() + bar.get_height() / 2, f"%{val:.2f}".replace(".", ","), va="center", fontsize=8.5)
+ax.set_xlabel("CatBoost Göreli Katkı Payı (%) — 10 Eğitim Katlaması Ort. ± Std")
+ax.set_title("Şampiyon Model (CatBoost) Kararlarına En Yüksek Katkıyı Sağlayan 15 Öznitelik")
+ax.set_xlim(0, (top15["Onem_Ort"] + top15["Onem_Std"]).max() * 1.18)
 ax.grid(axis="y", visible=False)
 plt.tight_layout()
-fig.savefig(OUT_FIG / "grafik_5_ozellik_onemi.png", dpi=200, bbox_inches="tight")
-plt.close(fig)
+save_fig(fig, OUT_FIG / "grafik_5_ozellik_onemi.png", dpi=200)
 
 # Grafik 6: Overfitting (max_depth Taramasi + Ogrenme Egrileri)
 fig, axes = plt.subplots(1, 2, figsize=(12.0, 4.4))
@@ -811,15 +850,14 @@ for idx, (m_name, (sizes, tr_sc, va_sc)) in enumerate(lc_plot_data.items()):
     axes[1].plot(sizes, va_mu, marker="o", color=PALETTE[idx], label=f"{m_name} (CV)")
     axes[1].fill_between(sizes, va_mu - va_sd, va_mu + va_sd, color=PALETTE[idx], alpha=0.12)
 axes[1].set(xlabel="Eğitim Örnek Sayısı", ylabel="Macro F1 (5-Kat CV)", title="Öğrenme Eğrileri (Learning Curves)")
-axes[1].legend(loc="lower right", fontsize=8)
+axes[1].legend(loc="center right", fontsize=8)
 plt.tight_layout()
-fig.savefig(OUT_FIG / "grafik_6_derinlik_ve_ogrenme.png", dpi=200, bbox_inches="tight")
-plt.close(fig)
+save_fig(fig, OUT_FIG / "grafik_6_derinlik_ve_ogrenme.png", dpi=200)
 
 # Grafik 7: Sinif Dengesizligi Deneyi
 fig, ax = plt.subplots(figsize=(9.0, 4.6))
-shown_imb = ["Accuracy_Ort", "F1_Macro_Ort", "Recall_Agir_Ort", "MCC_Ort", "AUPR_Macro_Ort"]
-labels_imb = ["Accuracy", "Macro F1", "Ağır Sınıf Recall", "MCC", "Macro AUPR"]
+shown_imb = ["Accuracy_Ort", "F1_Macro_Ort", "Recall_Agir_Ort", "MCC_Ort", "QWK_Ort"]
+labels_imb = ["Accuracy", "Macro F1", "Ağır Sınıf Recall", "MCC", "QWK"]
 markers_imb = ["o", "s", "^", "D", "v"]
 imb_names = list(df_imb.index)
 for k, (col, lab, mk) in enumerate(zip(shown_imb, labels_imb, markers_imb)):
@@ -833,8 +871,7 @@ ax.set_title("Sınıf Dengesizliği Müdahale Deneyi: Sade vs. class_weight vs. 
 ax.grid(axis="y", visible=False)
 ax.legend(ncol=5, loc="upper center", bbox_to_anchor=(0.48, -0.15), fontsize=8)
 plt.tight_layout()
-fig.savefig(OUT_FIG / "grafik_7_dengesizlik_deneyi.png", dpi=200, bbox_inches="tight")
-plt.close(fig)
+save_fig(fig, OUT_FIG / "grafik_7_dengesizlik_deneyi.png", dpi=200)
 
 # Grafik 8: Verimlilik (Hiz vs MCC)
 fig, ax = plt.subplots(figsize=(8.5, 4.8))
@@ -842,25 +879,26 @@ for idx, m in enumerate(real_models_sorted):
     t_s = summary_mean.loc[m, "Sure_sn"]
     mcc_v = summary_mean.loc[m, "MCC"]
     ax.scatter(t_s, mcc_v, color=PALETTE[idx % len(PALETTE)], s=95, edgecolors="black", zorder=4)
-    ax.annotate(m, (t_s, mcc_v), textcoords="offset points", xytext=(7, 4), fontsize=8.5, fontweight="bold")
-ax.set(xlabel="Toplam 10-Kat CV Süresi (Saniye) — Sola Doğru Daha Hızlı",
-       ylabel="10-Kat Ortalama MCC — Yukarı Doğru Daha Başarılı",
+    lbl = f"{m}*" if m == "RBF SVM" else m
+    ax.annotate(lbl, (t_s, mcc_v), textcoords="offset points", xytext=(7, 4), fontsize=8.5, fontweight="bold")
+ax.set(xlabel="Toplam 10-Kat CV Süresi (Saniye) — *RBF SVM 25K alt örneklemle eğitilmiştir",
+       ylabel="10-Kat Ortalama MCC",
        title="Model Verimliliği: Hesaplama Süresi vs. MCC Performansı")
 plt.tight_layout()
-fig.savefig(OUT_FIG / "grafik_8_hiz_vs_basari.png", dpi=200, bbox_inches="tight")
-plt.close(fig)
+save_fig(fig, OUT_FIG / "grafik_8_hiz_vs_basari.png", dpi=200)
 
 # JSON Kaydet (Tek Gercek Kaynagi)
 RESULTS["best_model"] = best_model
 RESULTS["model_order"] = ordered_all
-RESULTS["summary_mean"] = summary_mean.round(4).where(pd.notna(summary_mean), None).to_dict(orient="index")
-RESULTS["summary_std"] = summary_std.round(4).where(pd.notna(summary_std), None).to_dict(orient="index")
+RESULTS["summary_mean"] = summary_mean.round(4).astype(object).where(pd.notna(summary_mean), None).to_dict(orient="index")
+RESULTS["summary_std"] = summary_std.round(4).astype(object).where(pd.notna(summary_std), None).to_dict(orient="index")
+RESULTS["ppv_prevalans"] = df_ppv.round(4).to_dict(orient="records")
 RESULTS["smote_leak"] = df_smote_leak.round(4).to_dict(orient="index")
 
 with open(OUT_TAB / "sonuclar.json", "w", encoding="utf-8") as f:
     json.dump(RESULTS, f, ensure_ascii=False, indent=2)
 
-print("\n" + "=" * 74)
-print("TUM DENEYLER VE GRAFIKLER BASARIYLA TAMAMLANDI!")
-print(f"Sampiyon Model (MCC'ye gore): {best_model} (MCC={summary_mean.loc[best_model, 'MCC']:.4f}, Macro F1={summary_mean.loc[best_model, 'F1_M']:.4f})")
-print("=" * 74)
+print("\n" + "=" * 76)
+print("TUM GUNCEL DENEYLER VE GRAFIKLER BASARIYLA TAMAMLANDI!")
+print(f"Sampiyon Model: {best_model} | MCC={summary_mean.loc[best_model, 'MCC']:.4f} | QWK={summary_mean.loc[best_model, 'QWK']:.4f}")
+print("=" * 76)

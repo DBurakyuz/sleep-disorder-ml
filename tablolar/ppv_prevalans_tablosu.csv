@@ -1,0 +1,5 @@
+﻿Prevalans,Recall_Sabit,Specificity_Sabit,PPV,Yorum
+0.0407,0.8064,0.995,0.8718,Veri setindeki oran (OOF Precision ile uyumlu)
+0.02,0.8064,0.995,0.7661,Varsayımsal genel klinik tarama (%2)
+0.01,0.8064,0.995,0.6185,Varsayımsal düşük prevalanslı tarama (%1)
+0.005,0.8064,0.995,0.4465,"Varsayımsal nadir tarama (%0,5)"
